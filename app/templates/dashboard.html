@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Cache-Control" content="no-store" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Air Quality Fusion Dashboard</title>
+  <style>
+    :root{
+      --bg:#0b1020; --card:#121a2b; --muted:#97a4b5; --text:#edf3ff;
+      --accent:#39c6ff; --ok:#1dd1a1; --warn:#feca57; --bad:#ff6b6b;
+      --grid:#1e2a41; --border:#24314a; --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      --sans: Inter, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Arial, sans-serif;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;background:linear-gradient(180deg,#0a0f1e 0%,#0e1527 100%);color:var(--text);font-family:var(--sans)}
+    .wrap{max-width:1320px;margin:24px auto;padding:0 16px}
+    .top{display:flex;justify-content:space-between;gap:16px;align-items:flex-end;margin-bottom:18px}
+    h1{margin:0;font-size:30px}
+    .sub{color:var(--muted);font-size:14px;margin-top:6px}
+    .clock{font-family:var(--mono);color:#c7d3e4}
+    .grid{display:grid;grid-template-columns:2fr 1fr;gap:16px}
+    .card{background:linear-gradient(180deg,#111a2d 0%,#0f1729 100%);border:1px solid var(--border);border-radius:16px;padding:16px;box-shadow:0 10px 30px rgba(0,0,0,.28)}
+    .title{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.12em;margin-bottom:10px}
+    .value{font-size:76px;font-weight:800;font-family:var(--mono);line-height:1}
+    .meta{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:14px}
+    .k{font-size:12px;color:var(--muted)}
+    .v{font-size:17px;font-family:var(--mono)}
+    .badge{display:inline-flex;align-items:center;padding:7px 14px;border-radius:999px;font-weight:700;border:1px solid var(--border);background:#0d1425}
+    .badge.ok{color:#bff9ea;border-color:#175f50}
+    .badge.warn{color:#ffebba;border-color:#685016}
+    .badge.bad{color:#ffc0c0;border-color:#6a2323}
+    .bar{margin-top:14px;height:20px;background:#0a1220;border:1px solid var(--border);border-radius:12px;position:relative;overflow:hidden}
+    .bar .fill{position:absolute;top:0;left:0;bottom:0;width:0%;background:linear-gradient(90deg,#12d483,#feca57 55%,#ff6b6b 100%)}
+    .bar .tick{position:absolute;top:-8px;width:2px;height:36px;background:#2d3a57}
+    .legend{display:flex;justify-content:space-between;font-family:var(--mono);font-size:11px;color:#9fb0c5;margin-top:6px}
+    .mini-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:16px;margin-top:16px}
+    .stack{display:grid;gap:16px}
+    .alert-box{padding:12px 14px;border-radius:14px;border:1px solid var(--border);font-weight:700}
+    .alert-box.ok{background:rgba(29,209,161,.08);color:#bff9ea;border-color:#175f50}
+    .alert-box.bad{background:rgba(255,107,107,.08);color:#ffd2d2;border-color:#6a2323}
+    table{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:13px}
+    th,td{padding:10px;border-bottom:1px dashed #22304a;text-align:left}
+    thead th{color:#a5b4c8;background:#111b2f;position:sticky;top:0}
+    tbody tr:nth-child(even){background:#10192d}
+    .footer{color:var(--muted);font-size:12px;margin-top:8px}
+    canvas{width:100%;height:240px;display:block}
+    .btn{display:inline-block;padding:10px 14px;border-radius:10px;color:white;text-decoration:none;background:#0f2644;border:1px solid #234c7f;font-weight:700}
+    @media (max-width:1024px){.grid{grid-template-columns:1fr}.meta{grid-template-columns:repeat(2,1fr)}.value{font-size:60px}}
+    @media (max-width:640px){.meta{grid-template-columns:1fr}.mini-grid{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="top">
+      <div>
+        <h1>Air Quality Fusion Dashboard</h1>
+        <div class="sub">Proyecto unificado: compatibilidad legacy Flask + API moderna FastAPI + SQLite + exportación CSV</div>
+      </div>
+      <div class="clock" id="clock">--</div>
+    </div>
+
+    <section class="grid">
+      <div class="card">
+        <div class="title">Última lectura</div>
+        <div style="display:flex;justify-content:space-between;gap:16px;align-items:center;flex-wrap:wrap">
+          <div>
+            <div class="value" id="last-ao">--</div>
+            <div style="font-family:var(--mono);color:var(--muted)">AO (0–1023)</div>
+          </div>
+          <div id="alert-badge" class="badge">--</div>
+        </div>
+        <div class="bar">
+          <div class="fill" id="bar-fill"></div>
+          <div class="tick" style="left:29%"></div>
+          <div class="tick" style="left:44%"></div>
+          <div class="tick" style="left:63%"></div>
+        </div>
+        <div class="legend"><span>0</span><span>300</span><span>450</span><span>650</span><span>1023</span></div>
+        <div class="meta">
+          <div><div class="k">Timestamp</div><div class="v" id="last-ts">--</div></div>
+          <div><div class="k">Dispositivo</div><div class="v" id="last-device">--</div></div>
+          <div><div class="k">Voltaje</div><div class="v" id="last-voltage">--</div></div>
+          <div><div class="k">Calidad</div><div class="v" id="last-quality">--</div></div>
+        </div>
+      </div>
+
+      <div class="stack">
+        <div class="card">
+          <div class="title">Resumen</div>
+          <div class="meta" style="grid-template-columns:1fr 1fr">
+            <div><div class="k">Total lecturas</div><div class="v" id="stat-total">--</div></div>
+            <div><div class="k">Promedio ventana</div><div class="v" id="stat-avg">--</div></div>
+            <div><div class="k">Mínimo ventana</div><div class="v" id="stat-min">--</div></div>
+            <div><div class="k">Máximo ventana</div><div class="v" id="stat-max">--</div></div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="title">Estado operativo</div>
+          <div id="status-box" class="alert-box">--</div>
+          <div class="footer" style="margin-top:12px">Compatibilidad disponible en <strong>POST /data</strong>, <strong>POST /api/mq135</strong> y <strong>POST /api/readings</strong>.</div>
+          <div style="margin-top:12px"><a class="btn" href="/api/export/csv" target="_blank">Exportar CSV</a></div>
+        </div>
+      </div>
+    </section>
+
+    <div class="mini-grid">
+      <section class="card">
+        <div class="title">Histórico reciente</div>
+        <canvas id="chart"></canvas>
+      </section>
+      <section class="card">
+        <div class="title">Dispositivos</div>
+        <table>
+          <thead><tr><th>Device</th><th>Lecturas</th><th>Promedio</th><th>Máximo</th></tr></thead>
+          <tbody id="device-rows"><tr><td colspan="4">Sin datos</td></tr></tbody>
+        </table>
+      </section>
+    </div>
+
+    <section class="card" style="margin-top:16px">
+      <div class="title">Últimas lecturas</div>
+      <table>
+        <thead>
+          <tr>
+            <th>#</th><th>Timestamp</th><th>Device</th><th>AO</th><th>DO</th><th>Voltaje</th><th>Calidad</th><th>Origen</th>
+          </tr>
+        </thead>
+        <tbody id="rows"><tr><td colspan="8">Sin datos</td></tr></tbody>
+      </table>
+      <div class="footer">Actualización automática cada 2 segundos.</div>
+    </section>
+  </div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const fmt = (iso) => { try { return new Intl.DateTimeFormat('es-CL',{dateStyle:'short',timeStyle:'medium'}).format(new Date(iso)); } catch { return iso || '--'; } };
+const qLabel = (ao) => ao < 300 ? 'Muy buena' : ao < 450 ? 'Aceptable' : ao < 650 ? 'Mala (ventilar)' : 'Muy mala / posible humo o gas';
+function setBar(ao){ const pct = Math.max(0, Math.min(100, (ao/1023)*100)); $('bar-fill').style.width = pct + '%'; }
+function setAlert(ao){
+  const el = $('alert-badge');
+  el.className = 'badge';
+  if (ao < 300) { el.classList.add('ok'); el.textContent = 'Estado: Muy buena'; }
+  else if (ao < 650) { el.classList.add('warn'); el.textContent = 'Estado: Precaución'; }
+  else { el.classList.add('bad'); el.textContent = 'Estado: Alerta'; }
+}
+function setStatusBox(active){
+  const el = $('status-box');
+  el.className = 'alert-box ' + (active ? 'bad' : 'ok');
+  el.textContent = active ? 'ALERTA: la última lectura supera el umbral configurado.' : 'OK: la última lectura está bajo el umbral de alerta.';
+}
+async function getJson(url){ const r = await fetch(url); if(!r.ok) return null; return r.json(); }
+function renderRows(items){
+  const tbody = $('rows');
+  if(!items || !items.length){ tbody.innerHTML = '<tr><td colspan="8">Sin datos</td></tr>'; return; }
+  const last = [...items].reverse().slice(0,20);
+  tbody.innerHTML = last.map((it, idx) => `
+    <tr>
+      <td>${idx+1}</td>
+      <td>${fmt(it.ts)}</td>
+      <td>${it.device_id}</td>
+      <td>${it.ao}</td>
+      <td>${it.do_value === null || it.do_value === undefined ? '--' : (it.do_value ? 'HIGH' : 'LOW')}</td>
+      <td>${it.voltage === null || it.voltage === undefined ? '--' : Number(it.voltage).toFixed(2) + ' V'}</td>
+      <td>${it.quality_label || qLabel(it.ao)}</td>
+      <td>${it.source}</td>
+    </tr>
+  `).join('');
+}
+function renderDevices(items){
+  const tbody = $('device-rows');
+  if(!items || !items.length){ tbody.innerHTML = '<tr><td colspan="4">Sin datos</td></tr>'; return; }
+  tbody.innerHTML = items.map(it => `
+    <tr>
+      <td>${it.device_id}</td><td>${it.count}</td><td>${it.avg_ao}</td><td>${it.max_ao}</td>
+    </tr>
+  `).join('');
+}
+const canvas = $('chart');
+const ctx = canvas.getContext('2d');
+let W=0, H=0;
+function resize(){
+  const rect = canvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  W = canvas.width = rect.width * dpr;
+  H = canvas.height = 240 * dpr;
+}
+function draw(values){
+  ctx.clearRect(0,0,W,H);
+  if(!values || !values.length) return;
+  const dpr = window.devicePixelRatio || 1;
+  const pad = 14 * dpr;
+  const min = Math.min(...values, 0);
+  const max = Math.max(...values, 1);
+  ctx.strokeStyle = '#1e2a41'; ctx.lineWidth = 1;
+  for(let i=0;i<5;i++){
+    const y = pad + (i*(H-2*pad)/4);
+    ctx.beginPath(); ctx.moveTo(pad,y); ctx.lineTo(W-pad,y); ctx.stroke();
+  }
+  ctx.beginPath();
+  values.forEach((v,i)=>{
+    const x = pad + i*((W-2*pad)/(Math.max(values.length-1,1)));
+    const y = H-pad-((v-min)/Math.max(max-min,1))*(H-2*pad);
+    if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+  });
+  ctx.lineWidth = 2*dpr; ctx.strokeStyle = '#39c6ff'; ctx.stroke();
+}
+async function tick(){
+  const [latest, readings, stats, devices] = await Promise.all([
+    getJson('/api/readings/latest'),
+    getJson('/api/readings?limit=500'),
+    getJson('/api/stats?window=20'),
+    getJson('/api/devices?limit=1000')
+  ]);
+  if(latest){
+    $('last-ao').textContent = latest.ao;
+    $('last-ts').textContent = fmt(latest.ts);
+    $('last-device').textContent = latest.device_id;
+    $('last-voltage').textContent = latest.voltage === null || latest.voltage === undefined ? '--' : Number(latest.voltage).toFixed(2) + ' V';
+    $('last-quality').textContent = latest.quality_label || qLabel(latest.ao);
+    setBar(latest.ao); setAlert(latest.ao);
+  }
+  if(stats){
+    $('stat-total').textContent = stats.total;
+    $('stat-avg').textContent = Number(stats.avg_ao).toFixed(2);
+    $('stat-min').textContent = stats.min_ao;
+    $('stat-max').textContent = stats.max_ao;
+    setStatusBox(Boolean(stats.alert_active));
+  }
+  if(readings){ renderRows(readings); draw(readings.map(x => x.ao)); }
+  if(devices){ renderDevices(devices); }
+}
+function runClock(){ setInterval(()=> $('clock').textContent = new Date().toLocaleString('es-CL', {hour12:false}), 500); }
+window.addEventListener('resize', ()=>{ resize(); tick(); });
+resize(); runClock(); tick(); setInterval(tick, 2000);
+</script>
+</body>
+</html>
