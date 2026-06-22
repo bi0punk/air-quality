@@ -1,3 +1,8 @@
+"""
+DEPRECATION WARNING: This Flask version is deprecated and will be removed in a future release.
+Please migrate to the FastAPI version at app/main.py.
+"""
+
 from flask import Flask, request, jsonify
 import pandas as pd
 import os
@@ -14,10 +19,26 @@ if not os.path.exists(CSV_FILE):
 def receive_data():
 
     data = request.json
+    if data is None:
+        return jsonify({'error': 'Request body must be JSON'}), 400
     print(data)
 
     if 'valor_analogico' not in data or 'voltaje' not in data or 'calidad_aire' not in data:
         return jsonify({'error': 'Datos incompletos'}), 400
+
+    try:
+        valor_analogico = float(data['valor_analogico'])
+        voltaje = float(data['voltaje'])
+        calidad_aire = float(data['calidad_aire'])
+    except (ValueError, TypeError):
+        return jsonify({'error': 'Los valores deben ser numéricos'}), 400
+
+    if not (0 <= valor_analogico <= 1023):
+        return jsonify({'error': 'valor_analogico debe estar entre 0 y 1023'}), 400
+    if not (0 <= voltaje <= 5.0):
+        return jsonify({'error': 'voltaje debe estar entre 0 y 5.0'}), 400
+    if not (0 <= calidad_aire <= 500):
+        return jsonify({'error': 'calidad_aire debe estar entre 0 y 500'}), 400
 
     df = pd.read_csv(CSV_FILE)
 
