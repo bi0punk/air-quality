@@ -1,11 +1,39 @@
 # Air Quality Fusion API
 
+[![CI](https://github.com/bi0punk/air-quality/actions/workflows/ci.yml/badge.svg)](https://github.com/bi0punk/air-quality/actions/workflows/ci.yml)
+[![Python](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+
 Proyecto unificado y mejorado a partir de dos bases existentes:
 
 - **Proyecto 1**: Flask + CSV (`POST /data`) para guardar `valor_analogico`, `voltaje`, `calidad_aire`.
 - **Proyecto 2**: FastAPI + SQLite + dashboard (`POST /api/mq135`) para guardar `device_id`, `ao`, `do`.
 
 La nueva versión consolida ambos enfoques en un solo backend moderno, manteniendo compatibilidad con el formato antiguo y agregando una base más sólida para producción liviana.
+
+## Tabla de contenidos
+
+- [Qué se mejoró](#qué-se-mejoró)
+- [Stack](#stack)
+- [Arquitectura final](#arquitectura-final)
+- [Estructura](#estructura)
+- [Instalación](#instalación)
+- [Ejecución](#ejecución)
+- [Endpoints](#endpoints)
+- [Tests](#tests)
+- [CI](#ci)
+- [Importación de datos antiguos](#importación-automática-de-los-proyectos-antiguos)
+- [Limitaciones y roadmap](#siguientes-mejoras-naturales)
+- [Licencia](#licencia)
+
+## Stack
+
+- **Lenguaje**: Python 3.12+
+- **Web**: FastAPI + Uvicorn + Jinja2 (dashboard HTML).
+- **DB**: SQLite (WAL, índices).
+- **Validación**: Pydantic v2.
+- **Datos**: pandas (importación legacy CSV/SQLite).
+- **Calidad**: ruff (lint), pytest.
 
 ## Qué se mejoró
 
@@ -213,6 +241,21 @@ curl -OJ 'http://127.0.0.1:8000/api/export/csv?limit=10000'
 python3 import_legacy.py --csv ./legacy_inputs/datos_calidad_aire.csv --sqlite ./legacy_inputs/mq135.db
 ```
 
+## Tests
+
+```bash
+pytest -q
+```
+
+Cobertura (`tests/test_smoke.py`): health, crear+leer lectura unificada, compatibilidad de endpoints legacy (`/data` y `/api/mq135`) y export CSV. Usan una DB efímera vía `AIR_QUALITY_DB_PATH` y desactivan la importación legacy en startup (`AIR_QUALITY_IMPORT_ON_STARTUP=0`).
+
+## CI
+
+GitHub Actions (`.github/workflows/ci.yml`) sobre Python 3.12:
+
+- **lint** — `ruff check .`
+- **test** — instala deps + `pytest -q`
+
 ## Siguientes mejoras naturales
 
 1. Autenticación para endpoints de ingestión.
@@ -226,3 +269,7 @@ python3 import_legacy.py --csv ./legacy_inputs/datos_calidad_aire.csv --sqlite .
 ## Nota técnica importante
 
 El valor `AO` del MQ-135 **no equivale directamente** a una medida ambiental certificada sin calibración. Este proyecto lo trata correctamente como una **señal relativa** útil para tendencias, alertas internas y comparación entre lecturas del mismo dispositivo.
+
+## Licencia
+
+MIT — ver [LICENSE](LICENSE).
