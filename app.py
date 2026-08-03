@@ -57,4 +57,4 @@ def receive_data():
 
 
 if __name__ == '__main__':
-    app.run(host='192.168.1.117', port=5000)  
+    app.run(host=os.environ.get("HOST", "127.0.0.1"), port=5000)  
