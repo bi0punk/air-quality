@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import csv
 import io
+import logging
 import os
+from contextlib import asynccontextmanager
 from typing import Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException, Query
@@ -34,7 +36,28 @@ from .schemas import (
 )
 
 
-app = FastAPI(title="Air Quality Fusion API", version="2.0.0")
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Inicializa la DB y la importación legacy al arrancar la app."""
+    del app  # no se usan recursos compartidos en el ciclo de vida
+    db_dir = Path(DB_PATH).parent
+    db_dir.mkdir(parents=True, exist_ok=True)
+    from .db import init_db
+    init_db()
+    if IMPORT_ON_STARTUP:
+        try:
+            from .legacy_import import import_known_legacy_files
+            results = import_known_legacy_files(BASE_DIR)
+            logger.info("[startup] import legacy results: %s", results)
+        except Exception:
+            logger.exception("[startup] legacy import error")
+    yield
+
+
+app = FastAPI(title="Air Quality Fusion API", version="2.0.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -42,24 +65,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-# Asegurar que la base de datos existe al iniciar
-@app.on_event("startup")
-def on_startup() -> None:
-    # Crear directorio de datos si no existe
-    db_dir = Path(DB_PATH).parent
-    db_dir.mkdir(parents=True, exist_ok=True)
-    # Inicializar base de datos
-    from .db import init_db
-    init_db()
-    if IMPORT_ON_STARTUP:
-        try:
-            from . import services as svc_module
-            results = svc_module.import_known_legacy_files(BASE_DIR)
-            print(f"[startup] import legacy results: {results}")
-        except Exception as exc:
-            print(f"[startup] legacy import error: {exc}")
 
 
 @app.get("/health")
