@@ -92,6 +92,22 @@ def insert_reading(payload: dict[str, Any]) -> int:
         return int(cur.lastrowid)
 
 
+def insert_readings_many(payloads: Iterable[dict[str, Any]]) -> int:
+    """Inserta muchas lecturas en un solo lote/transacción."""
+    data_list = [normalize_payload(p) for p in payloads]
+    if not data_list:
+        return 0
+    with connection() as conn:
+        conn.executemany(
+            '''
+            INSERT INTO readings (ts, device_id, ao, do_value, voltage, quality_label, source)
+            VALUES (:ts, :device_id, :ao, :do_value, :voltage, :quality_label, :source)
+            ''',
+            data_list,
+        )
+        return len(data_list)
+
+
 def fetch_by_id(reading_id: int) -> Optional[dict[str, Any]]:
     with connection() as conn:
         row = conn.execute(

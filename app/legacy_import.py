@@ -8,8 +8,8 @@ import pandas as pd
 
 from .config import DEFAULT_DEVICE_ID
 from .db import connection
-from .schemas import UnifiedReadingIn
-from .services import insert_reading, infer_quality_label
+from .schemas import UnifiedReadingIn, reading_to_dict
+from .services import infer_quality_label, insert_readings_many
 
 
 def _already_imported(source_type: str, source_path: Path) -> bool:
@@ -42,18 +42,21 @@ def import_legacy_csv(csv_path: Path, device_id: str = 'legacy-csv') -> int:
     if not expected.issubset(set(df.columns)):
         raise ValueError(f'CSV no compatible: {csv_path}')
 
-    imported = 0
+    payloads = []
     for _, row in df.iterrows():
-        payload = UnifiedReadingIn(
-            device_id=device_id,
-            ao=int(row['valor_analogico']),
-            voltage=None if pd.isna(row['voltaje']) else float(row['voltaje']),
-            quality_label=None if pd.isna(row['calidad_aire']) else str(row['calidad_aire']),
-            source='legacy_csv',
+        payloads.append(
+            reading_to_dict(
+                UnifiedReadingIn(
+                    device_id=device_id,
+                    ao=int(row['valor_analogico']),
+                    voltage=None if pd.isna(row['voltaje']) else float(row['voltaje']),
+                    quality_label=None if pd.isna(row['calidad_aire']) else str(row['calidad_aire']),
+                    source='legacy_csv',
+                )
+            )
         )
-        insert_reading(payload)
-        imported += 1
 
+    imported = insert_readings_many(payloads)
     _mark_imported('legacy_csv', csv_path, imported)
     return imported
 
@@ -72,19 +75,22 @@ def import_legacy_sqlite(db_path: Path) -> int:
     finally:
         conn.close()
 
-    imported = 0
+    payloads = []
     for row in rows:
-        payload = UnifiedReadingIn(
-            device_id=row['device_id'] or DEFAULT_DEVICE_ID,
-            ao=int(row['ao']),
-            do_value=bool(row['do']) if row['do'] is not None else None,
-            quality_label=infer_quality_label(int(row['ao'])),
-            source='migration',
-            ts=datetime.fromisoformat(row['ts']),
+        payloads.append(
+            reading_to_dict(
+                UnifiedReadingIn(
+                    device_id=row['device_id'] or DEFAULT_DEVICE_ID,
+                    ao=int(row['ao']),
+                    do_value=bool(row['do']) if row['do'] is not None else None,
+                    quality_label=infer_quality_label(int(row['ao'])),
+                    source='migration',
+                    ts=datetime.fromisoformat(row['ts']),
+                )
+            )
         )
-        insert_reading(payload)
-        imported += 1
 
+    imported = insert_readings_many(payloads)
     _mark_imported('legacy_sqlite', db_path, imported)
     return imported
 
