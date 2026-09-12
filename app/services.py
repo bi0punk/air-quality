@@ -1,10 +1,17 @@
 from __future__ import annotations
 
+import csv
+import io
 from datetime import datetime, timezone
 from typing import Any, Iterable, Optional
 
-from .config import AO_ALERT_THRESHOLD
+from .config import AO_ALERT_THRESHOLD, DEFAULT_DEVICE_ID
 from .db import connection
+
+
+CSV_FIELDNAMES = [
+    'id', 'ts', 'device_id', 'source', 'ao', 'do_value', 'voltage', 'quality_label',
+]
 
 
 def utc_now_iso() -> str:
@@ -27,41 +34,52 @@ def infer_do_value(ao: int, provided: Optional[bool]) -> Optional[bool]:
     return ao >= AO_ALERT_THRESHOLD
 
 
+def _normalize_ts(raw_ts: Any) -> str:
+    if not raw_ts:
+        return utc_now_iso()
+    try:
+        if isinstance(raw_ts, datetime):
+            dt = raw_ts
+        else:
+            dt = datetime.fromisoformat(str(raw_ts))
+        return dt.astimezone(timezone.utc).isoformat()
+    except (ValueError, TypeError):
+        return utc_now_iso()
+
+
 def normalize_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    """Normalizar un dict de payload a formato de BD."""
-    ts = payload.get("ts")
-    if not ts:
-        ts = utc_now_iso()
-    else:
-        # Asegurar formato ISO
-        try:
-            from datetime import datetime
-            dt = datetime.fromisoformat(ts)
-            ts = dt.astimezone(timezone.utc).isoformat()
-        except (ValueError, TypeError):
-            ts = utc_now_iso()
-    
-    quality_label = payload.get("quality_label") or infer_quality_label(
-        int(payload.get("ao", 0))
-    )
-    do_value = infer_do_value(int(payload.get("ao", 0)), payload.get("do_value"))
-    
-    device_id = payload.get("device_id", "") or ""
-    device_id = device_id.strip() if device_id else ""
-    
+    """Normaliza un dict de payload (unificado o legacy) a formato de base de datos."""
+    ao_raw = payload.get('ao')
+    if ao_raw is None:
+        ao_raw = payload.get('valor_analogico', 0)
+    ao = int(float(ao_raw or 0))
+
+    quality_label = payload.get('quality_label') or payload.get('calidad_aire')
+    if quality_label is not None and not isinstance(quality_label, str):
+        quality_label = str(quality_label)
+    if not quality_label:
+        quality_label = infer_quality_label(ao)
+
+    voltage = payload.get('voltage')
+    if voltage is None:
+        voltage = payload.get('voltaje')
+
+    do_value = infer_do_value(ao, payload.get('do_value'))
+    device_id = str(payload.get('device_id') or DEFAULT_DEVICE_ID).strip()
+
     return {
-        "ts": ts,
-        "device_id": device_id,
-        "ao": int(payload.get("ao", 0)),
-        "do_value": None if do_value is None else int(bool(do_value)),
-        "voltage": payload.get("voltage"),
-        "quality_label": quality_label,
-        "source": payload.get("source", "api"),
+        'ts': _normalize_ts(payload.get('ts')),
+        'device_id': device_id,
+        'ao': ao,
+        'do_value': None if do_value is None else int(bool(do_value)),
+        'voltage': voltage,
+        'quality_label': quality_label,
+        'source': payload.get('source', 'api'),
     }
 
 
 def insert_reading(payload: dict[str, Any]) -> int:
-    """Insertar una lectura desde un dict."""
+    """Inserta una lectura desde un dict y devuelve su id."""
     data = normalize_payload(payload)
     with connection() as conn:
         cur = conn.execute(
@@ -72,6 +90,19 @@ def insert_reading(payload: dict[str, Any]) -> int:
             data,
         )
         return int(cur.lastrowid)
+
+
+def fetch_by_id(reading_id: int) -> Optional[dict[str, Any]]:
+    with connection() as conn:
+        row = conn.execute(
+            '''
+            SELECT id, ts, device_id, ao, do_value, voltage, quality_label, source
+            FROM readings
+            WHERE id = ?
+            ''',
+            (int(reading_id),),
+        ).fetchone()
+        return dict(row) if row else None
 
 
 def fetch_latest() -> Optional[dict[str, Any]]:
@@ -150,19 +181,10 @@ def fetch_device_breakdown(limit: int = 1000) -> list[dict[str, Any]]:
     return [dict(r) for r in rows]
 
 
-def rows_to_csv_rows(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
-    output = []
-    for row in rows:
-        output.append(
-            {
-                'id': row['id'],
-                'ts': row['ts'],
-                'device_id': row['device_id'],
-                'ao': row['ao'],
-                'do_value': row['do_value'],
-                'voltage': row['voltage'],
-                'calidad_aire': row.get('quality_label'),
-                'source': row.get('source', 'api'),
-            }
-        )
-    return output
+def rows_to_csv(rows: Iterable[dict[str, Any]]) -> str:
+    """Serializa lecturas a texto CSV listo para streaming."""
+    buffer = io.StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=CSV_FIELDNAMES, extrasaction='ignore')
+    writer.writeheader()
+    writer.writerows(rows)
+    return buffer.getvalue()

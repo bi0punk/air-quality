@@ -1,42 +1,38 @@
 from __future__ import annotations
 
-import csv
-import io
 import logging
-import os
 from contextlib import asynccontextmanager
-from typing import Dict, List, Optional
+from pathlib import Path
+from typing import Any, Optional
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
-from pathlib import Path
 
-from .config import APP_TITLE, BASE_DIR, DEFAULT_DEVICE_ID, IMPORT_ON_STARTUP, DB_PATH
+from .config import APP_TITLE, BASE_DIR, DB_PATH, IMPORT_ON_STARTUP
+from .schemas import (
+    LegacyCSVIn,
+    MQ135In,
+    ReadingListItem,
+    ReadingOut,
+    ReadingSource,
+    UnifiedReadingIn,
+    reading_to_dict,
+    validate_reading_payload,
+)
 from .services import (
+    fetch_by_id as svc_fetch_by_id,
+    fetch_device_breakdown as svc_fetch_device_breakdown,
     fetch_latest as svc_fetch_latest,
     fetch_readings as svc_fetch_readings,
     fetch_stats as svc_fetch_stats,
-    fetch_device_breakdown as svc_fetch_device_breakdown,
     insert_reading as svc_insert_reading,
-    rows_to_csv_rows as svc_rows_to_csv_rows,
-    normalize_payload as svc_normalize_payload,
+    rows_to_csv as svc_rows_to_csv,
 )
-from .schemas import (
-    UnifiedReadingIn,
-    ReadingOut,
-    ReadingListItem,
-    LegacyCSVIn,
-    MQ135In,
-    QualityLabel,
-    ReadingSource,
-    validate_reading_payload,
-    reading_to_dict,
-)
-
 
 logger = logging.getLogger(__name__)
+templates = Jinja2Templates(directory=str(BASE_DIR / 'app' / 'templates'))
 
 
 @asynccontextmanager
@@ -51,208 +47,163 @@ async def lifespan(app: FastAPI):
         try:
             from .legacy_import import import_known_legacy_files
             results = import_known_legacy_files(BASE_DIR)
-            logger.info("[startup] import legacy results: %s", results)
+            logger.info('[startup] import legacy results: %s', results)
         except Exception:
-            logger.exception("[startup] legacy import error")
+            logger.exception('[startup] legacy import error')
     yield
 
 
-app = FastAPI(title="Air Quality Fusion API", version="2.0.0", lifespan=lifespan)
+app = FastAPI(title='Air Quality Fusion API', version='2.1.0', lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=['*'],
     allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=['*'],
+    allow_headers=['*'],
 )
 
 
-@app.get("/health")
+def _row_to_reading_out(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        'id': row['id'],
+        'ts': row.get('ts', ''),
+        'device_id': row.get('device_id', ''),
+        'ao': row.get('ao'),
+        'do_value': row.get('do_value'),
+        'voltage': row.get('voltage'),
+        'quality_label': row.get('quality_label'),
+    }
+
+
+@app.get('/health')
 def health() -> JSONResponse:
-    return JSONResponse({"status": "ok"})
+    return JSONResponse({'status': 'ok', 'service': APP_TITLE})
 
 
-@app.get("/api/info") 
+@app.get('/api/info', response_class=PlainTextResponse)
 def info() -> str:
-    return "Air Quality Fusion API"
+    return (
+        'Air Quality Fusion API\n'
+        'Compatibilidad: POST /data (Flask legacy), POST /api/mq135, POST /api/readings\n'
+        'Dashboard: /dashboard\n'
+        'Salud: /health\n'
+    )
 
 
 # --- Lecturas unificadas ---
 
-@app.post("/api/readings", response_model=ReadingOut, status_code=200)
-def create_reading_unified(payload: UnifiedReadingIn) -> JSONResponse:
+@app.post('/api/readings', response_model=ReadingOut, status_code=200)
+def create_reading_unified(payload: UnifiedReadingIn) -> dict[str, Any]:
     """Endpoint unificado para recibir lecturas."""
     try:
         validate_reading_payload(payload)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    
-    reading_dict = reading_to_dict(payload)
-    new_id = svc_insert_reading(reading_dict)
-    row = svc_fetch_latest()
-    
+
+    new_id = svc_insert_reading(reading_to_dict(payload))
+    row = svc_fetch_by_id(new_id)
     if not row:
-        raise HTTPException(status_code=404, detail="No hay lecturas")
-    
-    return JSONResponse({
-        "id": row["id"],
-        "ts": row.get("ts", ""),
-        "quality_label": row.get("quality_label"),
-        "ao": row.get("ao"),
-        "do_value": row.get("do_value"),
-        "voltage": row.get("voltage"),
-        "device_id": row.get("device_id"),
-    })
+        raise HTTPException(status_code=500, detail='No se pudo recuperar la lectura guardada')
+    return _row_to_reading_out(row)
 
 
 # --- Endpoint legado MQ135 ---
 
-@app.post("/api/mq135", response_model=ReadingOut, status_code=201)
-def create_reading_mq135(payload: MQ135In) -> JSONResponse:
+@app.post('/api/mq135', response_model=ReadingOut, status_code=201)
+def create_reading_mq135(payload: MQ135In) -> dict[str, Any]:
     """Endpoint legacy para lectores MQ135."""
-    try:
-        # Convertir a formato unificado
-        unified = UnifiedReadingIn(
-            device_id=payload.device_id,
-            source=ReadingSource.MQ135,
-            ao=payload.ao,
-            do_value=payload.do,
-        )
-        validate_reading_payload(unified)
-        reading_dict = reading_to_dict(unified)
-        new_id = svc_insert_reading(reading_dict)
-        row = svc_fetch_latest()
-        
-        if not row:
-            raise HTTPException(status_code=404, detail="No hay lecturas")
-        
-        return JSONResponse({
-            "id": row["id"],
-            "ts": row.get("ts", ""),
-            "quality_label": row.get("quality_label"),
-            "ao": row.get("ao"),
-            "do_value": row.get("do_value"),
-            "voltage": row.get("voltage"),
-            "device_id": row.get("device_id"),
-        })
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    unified = UnifiedReadingIn(
+        device_id=payload.device_id,
+        source=ReadingSource.MQ135,
+        ao=payload.ao,
+        do_value=payload.do,
+    )
+    new_id = svc_insert_reading(reading_to_dict(unified))
+    row = svc_fetch_by_id(new_id)
+    if not row:
+        raise HTTPException(status_code=500, detail='No se pudo recuperar la lectura guardada')
+    return _row_to_reading_out(row)
 
 
 # --- Endpoint legado Flask /data ---
 
-@app.post("/data", response_class=JSONResponse)
+@app.post('/data', response_class=JSONResponse)
 def legacy_data_post(payload: LegacyCSVIn) -> JSONResponse:
-    """Compatibilidad con Flask /data endpoint.
-    
-    Accepta JSON con campos: valor_analogico, voltaje, calidad_aire
-    """
+    """Compatibilidad con el endpoint Flask /data (payload legacy)."""
     try:
-        # Validar primero
         validate_reading_payload(payload)
-        
-        # Convertir a dict para insertar
-        reading_dict = reading_to_dict(payload)
-        new_id = svc_insert_reading(reading_dict)
-        
-        return JSONResponse({
-            "message": "Datos guardados con éxito", 
-            "compat_mode": "legacy_flask"
-        })
-    except (ValueError, Exception) as e:
-        return JSONResponse({"error": str(e)}, status_code=400)
+        svc_insert_reading(reading_to_dict(payload))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception:
+        logger.exception('legacy /data insert falló')
+        raise HTTPException(status_code=500, detail='Error interno al guardar los datos')
+
+    return JSONResponse({'message': 'Datos guardados con éxito', 'compat_mode': 'legacy_flask'})
 
 
 # --- Listado ---
 
-@app.get("/api/readings", response_model=List[ReadingListItem])
+@app.get('/api/readings', response_model=list[ReadingListItem])
 def list_readings(
     limit: int = Query(default=100, ge=1, le=5000),
-) -> List[Dict]:
-    """Listado de lecturas."""
-    readings = svc_fetch_readings(limit=limit)
+    device_id: Optional[str] = Query(default=None),
+) -> list[dict[str, Any]]:
+    """Listado de lecturas (filtrable por dispositivo, orden cronológico)."""
+    readings = svc_fetch_readings(limit=limit, device_id=device_id)
     return [
         {
-            "id": r["id"],
-            "ts": r.get("ts", ""),
-            "device_id": r.get("device_id", ""),
-            "ao": r.get("ao"),
-            "do_value": r.get("do_value"),
-            "voltage": r.get("voltage"),
-            "quality_label": r.get("quality_label"),
-            "source": ReadingSource(r.get("source", "api")),
+            'id': r['id'],
+            'ts': r.get('ts', ''),
+            'device_id': r.get('device_id', ''),
+            'ao': r.get('ao'),
+            'do_value': r.get('do_value'),
+            'voltage': r.get('voltage'),
+            'quality_label': r.get('quality_label'),
+            'source': ReadingSource(r.get('source', 'api')),
         }
         for r in readings
     ]
 
 
-@app.get("/api/readings/latest", response_model=ReadingOut)
-def latest_reading() -> JSONResponse:
-    """Última lectura."""
+@app.get('/api/readings/latest', response_model=ReadingOut)
+def latest_reading() -> dict[str, Any]:
+    """Última lectura registrada."""
     row = svc_fetch_latest()
     if not row:
-        raise HTTPException(status_code=404, detail="No hay lecturas")
-    return JSONResponse({
-        "id": row["id"],
-        "ts": row.get("ts", ""),
-        "quality_label": row.get("quality_label"),
-        "ao": row.get("ao"),
-        "voltage": row.get("voltage"),
-    })
+        raise HTTPException(status_code=404, detail='No hay lecturas aún')
+    return _row_to_reading_out(row)
 
 
 # --- Estadísticas ---
 
-@app.get("/api/stats")
-def stats(window: int = Query(default=10, ge=1, le=1000)) -> Dict:
+@app.get('/api/stats')
+def stats(window: int = Query(default=10, ge=1, le=1000)) -> dict[str, Any]:
     return svc_fetch_stats(window=window)
 
 
 # --- Desglose ---
 
-@app.get("/api/devices")
-def devices(limit: int = Query(default=1000, ge=1, le=10000)) -> Dict:
+@app.get('/api/devices')
+def devices(limit: int = Query(default=1000, ge=1, le=10000)) -> list[dict[str, Any]]:
     return svc_fetch_device_breakdown(limit=limit)
 
 
 # --- CSV export ---
 
-@app.get("/api/export/csv")
+@app.get('/api/export/csv')
 def export_csv(limit: int = Query(default=10000, ge=1, le=50000)) -> StreamingResponse:
-    rows = svc_fetch_readings(limit=limit)
-    csv_rows = svc_rows_to_csv_rows(rows)
-    import io
-    import csv as csv_mod
-    buffer = io.StringIO()
-    writer = csv_mod.DictWriter(
-        buffer,
-        fieldnames=["id", "ts", "device_id", "source", "ao", "do_value", "voltage", "calidad_aire", "quality_label"]
-    )
-    writer.writeheader()
-    writer.writerows(csv_rows)
-    buffer.seek(0)
+    csv_text = svc_rows_to_csv(svc_fetch_readings(limit=limit))
     return StreamingResponse(
-        iter([buffer.getvalue()]),
-        media_type="text/csv",
-        headers={"Content-Disposition": 'attachment; filename="air_quality_export.csv"'}
+        iter([csv_text]),
+        media_type='text/csv',
+        headers={'Content-Disposition': 'attachment; filename="air_quality_export.csv"'},
     )
 
 
 # --- Dashboard ---
 
-@app.get("/", response_class=HTMLResponse)
-def dashboard_root() -> HTMLResponse:
-    from fastapi import Request
-    return HTMLResponse("<h1>Dashboard Air Quality</h1><p>Panel de control</p>")
-
-@app.get("/dashboard", include_in_schema=False)
-def dashboard_redirect() -> HTMLResponse:
-    from fastapi import Request
-    return HTMLResponse("<h1>Dashboard Air Quality</h1><p>Panel de control</h1>")
-
-
-# --- Debug ---
-
-@app.get("/api/debug/routes")
-def debug_routes() -> Dict:
-    return {"routes": ["/api/readings", "/api/readings/latest", "/api/stats", "/api/devices", "/api/export/csv"]}
+@app.get('/', include_in_schema=False)
+@app.get('/dashboard', include_in_schema=False)
+def dashboard(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(request, 'dashboard.html')

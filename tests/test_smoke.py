@@ -68,7 +68,7 @@ def test_legacy_endpoints_compat(client):
 
     # Endpoint legado /api/mq135
     r = client.post("/api/mq135", json={"device_id": "dev1", "ao": 500, "do": 0})
-    assert r.status_code == 200
+    assert r.status_code == 201, r.text
     assert r.json()["device_id"] == "dev1"
 
 
