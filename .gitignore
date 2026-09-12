@@ -9,6 +9,9 @@ env/
 venv/
 .pytest_cache/
 .ruff_cache/
+.coverage
+htmlcov/
+.mypy_cache/
 .vscode/
 .idea/
 .DS_Store
