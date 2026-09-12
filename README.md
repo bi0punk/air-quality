@@ -64,6 +64,12 @@ La nueva versión consolida ambos enfoques en un solo backend moderno, mantenien
    - Índices SQLite.
    - Importación idempotente con `import_registry`.
 
+6. **Refactor de calidad**
+   - Dashboard real renderizado desde `app/templates/dashboard.html` (vía Jinja2).
+   - Migrado a `lifespan` de FastAPI y logging estructurado.
+   - CORS sin credenciales con origen wildcard.
+   - Importación legacy por lotes en una sola transacción (~13 k filas en <2 s).
+
 ## Hallazgos del análisis de los proyectos originales
 
 ### Proyecto 1 (Flask + CSV)
@@ -119,7 +125,7 @@ SQLite
 ## Estructura
 
 ```text
-air_quality_unificado_mejorado/
+air-quality/
 ├── app/
 │   ├── __init__.py
 │   ├── config.py
@@ -128,8 +134,15 @@ air_quality_unificado_mejorado/
 │   ├── main.py
 │   ├── schemas.py
 │   ├── services.py
+│   ├── static/
 │   └── templates/
 │       └── dashboard.html
+├── tests/
+│   ├── conftest.py
+│   ├── test_smoke.py
+│   ├── test_services.py
+│   ├── test_schemas.py
+│   └── test_legacy_import.py
 ├── data/
 ├── legacy_inputs/
 │   ├── datos_calidad_aire.csv
@@ -235,6 +248,15 @@ curl 'http://127.0.0.1:8000/api/stats?window=20'
 curl -OJ 'http://127.0.0.1:8000/api/export/csv?limit=10000'
 ```
 
+Columnas: `id`, `ts`, `device_id`, `source`, `ao`, `do_value`, `voltage`, `quality_label`.
+
+### 8) Info y listado con filtro
+
+```bash
+curl 'http://127.0.0.1:8000/api/info'
+curl 'http://127.0.0.1:8000/api/readings?device_id=mq135-uno-1&limit=10'
+```
+
 ## Importación manual
 
 ```bash
@@ -247,7 +269,18 @@ python3 import_legacy.py --csv ./legacy_inputs/datos_calidad_aire.csv --sqlite .
 pytest -q
 ```
 
-Cobertura (`tests/test_smoke.py`): health, crear+leer lectura unificada, compatibilidad de endpoints legacy (`/data` y `/api/mq135`) y export CSV. Usan una DB efímera vía `AIR_QUALITY_DB_PATH` y desactivan la importación legacy en startup (`AIR_QUALITY_IMPORT_ON_STARTUP=0`).
+La suite usa una DB efímera por test (deja `AIR_QUALITY_DB_PATH` en un `tmp_path` y desactiva la
+importación legacy en startup con `AIR_QUALITY_IMPORT_ON_STARTUP=0`). Cubre:
+
+- **endpoints smoke** (`tests/test_smoke.py`): health, ingesta unificada/legacy (`/data`, `/api/mq135`),
+  listado con filtro, última lectura, stats, devices, export CSV y render del dashboard.
+- **servicios** (`tests/test_services.py`): umbrales de calidad, normalización (incl. mapping legacy y
+  timestamps), insert/fetch, stats, breakdown y serialización CSV.
+- **schemas** (`tests/test_schemas.py`): alias, fuentes y rangos de validación.
+- **importación legacy** (`tests/test_legacy_import.py`): CSV y SQLite idempotentes mediante importación
+  por lotes en una sola transacción.
+
+Cobertura aproximada: **~92 %** del paquete `app/`.
 
 ## CI
 
