@@ -1,39 +1,21 @@
-"""Smoke tests para Air Quality Fusion API.
+"""Tests de endpoints (smoke) para Air Quality Fusion API.
 
-Usan TestClient de FastAPI y una DB efímera vía AIR_QUALITY_DB_PATH para no tocar
-el data/air_quality.db real.
+Usan la DB efímera provista por el fixture `client` de `conftest.py`.
 """
 
 from __future__ import annotations
-
-from pathlib import Path
-
-import pytest
-
-
-@pytest.fixture(autouse=True)
-def tmp_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    db = tmp_path / "test_air_quality.db"
-    monkeypatch.setenv("AIR_QUALITY_DB_PATH", str(db))
-    monkeypatch.setenv("AIR_QUALITY_IMPORT_ON_STARTUP", "0")
-    # Reimport config para que tome el nuevo path antes de arrancar la app.
-    import importlib
-
-    import app.config as config
-    importlib.reload(config)
-    import app.db as dbmod
-    importlib.reload(dbmod)
-    import app.services as services
-    importlib.reload(services)
-    import app.main as mainmod
-    importlib.reload(mainmod)
-    yield mainmod.app
 
 
 def test_health(client):
     r = client.get("/health")
     assert r.status_code == 200
     assert r.json()["status"] == "ok"
+
+
+def test_info(client):
+    r = client.get("/api/info")
+    assert r.status_code == 200
+    assert "Air Quality Fusion API" in r.text
 
 
 def test_create_and_read_unified(client):
@@ -66,6 +48,11 @@ def test_legacy_endpoints_compat(client):
     assert r.status_code == 200
     assert r.json()["compat_mode"] == "legacy_flask"
 
+    # El label legacy se preserva y valor_analogico se mapea a ao
+    latest = client.get("/api/readings/latest").json()
+    assert latest["ao"] == 420
+    assert latest["quality_label"] == "Regular"
+
     # Endpoint legado /api/mq135
     r = client.post("/api/mq135", json={"device_id": "dev1", "ao": 500, "do": 0})
     assert r.status_code == 201, r.text
@@ -77,12 +64,64 @@ def test_csv_export(client):
     r = client.get("/api/export/csv", params={"limit": 100})
     assert r.status_code == 200
     assert "text/csv" in r.headers.get("content-type", "")
-    assert "device_id" in r.text
+    header = r.text.splitlines()[0]
+    assert "device_id" in header and "quality_label" in header
 
 
-@pytest.fixture
-def client(tmp_db):
-    from fastapi.testclient import TestClient
+def test_latest_includes_full_row(client):
+    client.post("/api/readings", json={"device_id": "d1", "ao": 250, "do_value": 0, "voltage": 1.2})
+    latest = client.get("/api/readings/latest").json()
+    assert "device_id" in latest and latest["device_id"] == "d1"
+    assert "do_value" in latest and latest["do_value"] == 0
 
-    with TestClient(tmp_db) as c:
-        yield c
+
+def test_stats_endpoint(client):
+    client.post("/api/readings", json={"device_id": "a", "ao": 100, "source": "manual"})
+    client.post("/api/readings", json={"device_id": "b", "ao": 400, "source": "manual"})
+    r = client.get("/api/stats", params={"window": 5})
+    assert r.status_code == 200
+    stats = r.json()
+    assert stats["total"] == 2
+    assert stats["max_ao"] == 400
+    assert stats["min_ao"] == 100
+    assert stats["avg_ao"] == 250.0
+    assert stats["alert_active"] is False
+
+
+def test_devices_endpoint(client):
+    client.post("/api/readings", json={"device_id": "dev-a", "ao": 100, "source": "manual"})
+    client.post("/api/readings", json={"device_id": "dev-a", "ao": 300, "source": "manual"})
+    client.post("/api/readings", json={"device_id": "dev-b", "ao": 200, "source": "manual"})
+    r = client.get("/api/devices")
+    assert r.status_code == 200
+    by_id = {item["device_id"]: item for item in r.json()}
+    assert by_id["dev-a"]["count"] == 2
+    assert by_id["dev-b"]["count"] == 1
+    assert by_id["dev-a"]["max_ao"] == 300
+
+
+def test_list_readings_device_filter(client):
+    client.post("/api/readings", json={"device_id": "alpha", "ao": 100, "source": "manual"})
+    client.post("/api/readings", json={"device_id": "beta", "ao": 200, "source": "manual"})
+    r = client.get("/api/readings", params={"device_id": "alpha"})
+    assert r.status_code == 200
+    items = r.json()
+    assert len(items) == 1
+    assert items[0]["device_id"] == "alpha"
+    assert items[0]["source"] == "manual"
+
+
+def test_dashboard_renders(client):
+    for path in ("/", "/dashboard"):
+        r = client.get(path)
+        assert r.status_code == 200
+        assert "Air Quality Fusion Dashboard" in r.text
+
+
+def test_invalid_ao_rejected(client):
+    r = client.post("/api/readings", json={"device_id": "d", "ao": 99999})
+    assert r.status_code == 422
+
+
+def test_latest_404_when_empty(client):
+    assert client.get("/api/readings/latest").status_code == 404

@@ -3,7 +3,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any, Optional, Union
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 
 
 def validate_reading_payload(payload: BaseModel) -> None:
@@ -73,7 +73,8 @@ class LegacyCSVIn(BaseModel):
     calidad_aire: Optional[Union[str, float]] = None
     source: ReadingSource = ReadingSource.LEGACY
 
-    @validator('calidad_aire', pre=True)
+    @field_validator('calidad_aire', mode='before')
+    @classmethod
     def flexibility_calidad_aire(cls, v: Any) -> Any:
         if v is None or isinstance(v, str):
             return v
