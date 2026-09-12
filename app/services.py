@@ -5,7 +5,6 @@ from typing import Any, Iterable, Optional
 
 from .config import AO_ALERT_THRESHOLD
 from .db import connection
-from .schemas import UnifiedReadingIn
 
 
 def utc_now_iso() -> str:
@@ -28,22 +27,41 @@ def infer_do_value(ao: int, provided: Optional[bool]) -> Optional[bool]:
     return ao >= AO_ALERT_THRESHOLD
 
 
-def normalize_payload(payload: UnifiedReadingIn) -> dict[str, Any]:
-    ts = payload.ts.astimezone(timezone.utc).isoformat() if payload.ts else utc_now_iso()
-    quality_label = payload.quality_label or infer_quality_label(payload.ao)
-    do_value = infer_do_value(payload.ao, payload.do_value)
+def normalize_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Normalizar un dict de payload a formato de BD."""
+    ts = payload.get("ts")
+    if not ts:
+        ts = utc_now_iso()
+    else:
+        # Asegurar formato ISO
+        try:
+            from datetime import datetime
+            dt = datetime.fromisoformat(ts)
+            ts = dt.astimezone(timezone.utc).isoformat()
+        except (ValueError, TypeError):
+            ts = utc_now_iso()
+    
+    quality_label = payload.get("quality_label") or infer_quality_label(
+        int(payload.get("ao", 0))
+    )
+    do_value = infer_do_value(int(payload.get("ao", 0)), payload.get("do_value"))
+    
+    device_id = payload.get("device_id", "") or ""
+    device_id = device_id.strip() if device_id else ""
+    
     return {
-        'ts': ts,
-        'device_id': payload.device_id.strip(),
-        'ao': int(payload.ao),
-        'do_value': None if do_value is None else int(bool(do_value)),
-        'voltage': payload.voltage,
-        'quality_label': quality_label,
-        'source': payload.source,
+        "ts": ts,
+        "device_id": device_id,
+        "ao": int(payload.get("ao", 0)),
+        "do_value": None if do_value is None else int(bool(do_value)),
+        "voltage": payload.get("voltage"),
+        "quality_label": quality_label,
+        "source": payload.get("source", "api"),
     }
 
 
-def insert_reading(payload: UnifiedReadingIn) -> int:
+def insert_reading(payload: dict[str, Any]) -> int:
+    """Insertar una lectura desde un dict."""
     data = normalize_payload(payload)
     with connection() as conn:
         cur = conn.execute(
@@ -142,9 +160,9 @@ def rows_to_csv_rows(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
                 'device_id': row['device_id'],
                 'ao': row['ao'],
                 'do_value': row['do_value'],
-                'voltaje': row['voltage'],
-                'calidad_aire': row['quality_label'],
-                'source': row['source'],
+                'voltage': row['voltage'],
+                'calidad_aire': row.get('quality_label'),
+                'source': row.get('source', 'api'),
             }
         )
     return output
