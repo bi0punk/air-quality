@@ -1,307 +1,174 @@
 # Air Quality Fusion API
 
+API unificada de calidad del aire que consolida dos proyectos previos (Flask + CSV y FastAPI + SQLite) en un solo backend FastAPI: ingesta por tres endpoints compatibles, persistencia SQLite, dashboard HTML, exportación CSV e importación automática de datos legacy.
+
 [![CI](https://github.com/bi0punk/air-quality/actions/workflows/ci.yml/badge.svg)](https://github.com/bi0punk/air-quality/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-Proyecto unificado y mejorado a partir de dos bases existentes:
+## Contenido
 
-- **Proyecto 1**: Flask + CSV (`POST /data`) para guardar `valor_analogico`, `voltaje`, `calidad_aire`.
-- **Proyecto 2**: FastAPI + SQLite + dashboard (`POST /api/mq135`) para guardar `device_id`, `ao`, `do`.
-
-La nueva versión consolida ambos enfoques en un solo backend moderno, manteniendo compatibilidad con el formato antiguo y agregando una base más sólida para producción liviana.
-
-## Tabla de contenidos
-
-- [Qué se mejoró](#qué-se-mejoró)
+- [Características](#características)
+- [Arquitectura](#arquitectura)
 - [Stack](#stack)
-- [Arquitectura final](#arquitectura-final)
-- [Estructura](#estructura)
+- [Estructura del repositorio](#estructura-del-repositorio)
 - [Instalación](#instalación)
-- [Ejecución](#ejecución)
-- [Endpoints](#endpoints)
-- [Tests](#tests)
-- [CI](#ci)
-- [Importación de datos antiguos](#importación-automática-de-los-proyectos-antiguos)
-- [Limitaciones y roadmap](#siguientes-mejoras-naturales)
+- [Uso](#uso)
+- [Configuración](#configuración)
+- [Tests / CI](#tests--ci)
+- [Roadmap](#roadmap)
 - [Licencia](#licencia)
+
+## Características
+
+- Unificación del modelo de datos en una sola tabla `readings` (`device_id`, `ao`, `do_value`, `voltage`, `quality_label`, `source`, `ts`).
+- Compatibilidad hacia atrás: acepta el endpoint legacy `POST /data` (Flask) y `POST /api/mq135`, además del canónico `POST /api/readings`.
+- Persistencia SQLite (WAL, índices) con exportación CSV on-demand.
+- Importador automático de datos antiguos (`datos_calidad_aire.csv` y `mq135.db`), idempotente vía `import_registry` (~13 k filas en <2 s).
+- Dashboard HTML (Jinja2): última lectura, estado de alerta, histórico de AO, tabla de últimas lecturas y resumen por dispositivo.
+- Hardening básico: validaciones Pydantic v2, host configurable, CORS sin credenciales, logging estructurado y `lifespan` de FastAPI.
+
+## Arquitectura
+
+```mermaid
+flowchart TD
+  A[ESP32 / cliente HTTP] -->|POST /data legacy| B[FastAPI app/main.py]
+  A -->|POST /api/mq135| B
+  A -->|POST /api/readings canónico| B
+  B --> C[Validación Pydantic<br/>app/schemas.py]
+  C --> D[Servicio de normalización<br/>app/services.py]
+  D --> E[(SQLite readings +<br/>import_registry)]
+  B --> F[Importador legacy<br/>app/legacy_import.py]
+  E --> G[Dashboard HTML<br/>app/templates/dashboard.html]
+  E --> H[Exportación CSV<br/>/api/export/csv]
+  F --> E
+```
+
+En el arranque se intenta importar automáticamente `legacy_inputs/datos_calidad_aire.csv` y `legacy_inputs/mq135.db` (idempotente).
 
 ## Stack
 
 - **Lenguaje**: Python 3.12+
-- **Web**: FastAPI + Uvicorn + Jinja2 (dashboard HTML).
-- **DB**: SQLite (WAL, índices).
-- **Validación**: Pydantic v2.
-- **Datos**: pandas (importación legacy CSV/SQLite).
-- **Calidad**: ruff (lint), pytest.
+- **Web**: FastAPI + Uvicorn + Jinja2 (dashboard)
+- **DB**: SQLite (WAL, índices)
+- **Validación**: Pydantic v2
+- **Datos**: pandas (importación legacy CSV/SQLite)
+- **Calidad**: ruff (lint), pytest
 
-## Qué se mejoró
+## Estructura del repositorio
 
-1. **Unificación real del modelo de datos**
-   - Una sola tabla `readings`.
-   - Campos soportados: `device_id`, `ao`, `do_value`, `voltage`, `quality_label`, `source`, `ts`.
-
-2. **Compatibilidad hacia atrás**
-   - Sigue aceptando el endpoint legado `POST /data`.
-   - Sigue aceptando `POST /api/mq135`.
-   - Además agrega `POST /api/readings` como endpoint canónico.
-
-3. **Persistencia mejorada**
-   - SQLite como almacenamiento principal.
-   - Exportación CSV on-demand.
-   - Importador de datos antiguos (`datos_calidad_aire.csv` y `mq135.db`).
-
-4. **Dashboard mejorado**
-   - Última lectura.
-   - Estado de alerta.
-   - Histórico de AO.
-   - Tabla de últimas lecturas.
-   - Resumen por dispositivo.
-
-5. **Hardening básico**
-   - Host configurable.
-   - Validaciones con Pydantic.
-   - Índices SQLite.
-   - Importación idempotente con `import_registry`.
-
-6. **Refactor de calidad**
-   - Dashboard real renderizado desde `app/templates/dashboard.html` (vía Jinja2).
-   - Migrado a `lifespan` de FastAPI y logging estructurado.
-   - CORS sin credenciales con origen wildcard.
-   - Importación legacy por lotes en una sola transacción (~13 k filas en <2 s).
-
-## Hallazgos del análisis de los proyectos originales
-
-### Proyecto 1 (Flask + CSV)
-
-**Fortalezas**
-- Muy simple para integrar desde un microcontrolador.
-- Formato de payload claro.
-- CSV fácil de inspeccionar.
-
-**Debilidades**
-- Host IP hardcodeado.
-- Sin dashboard.
-- Sin estadísticas.
-- Sin control de crecimiento del CSV.
-- Sin separación por dispositivo.
-- Sin timestamps explícitos en cada fila.
-
-### Proyecto 2 (FastAPI + SQLite + Dashboard)
-
-**Fortalezas**
-- Mucho mejor base técnica.
-- Persistencia robusta.
-- Dashboard útil.
-- Endpoints más limpios.
-
-**Debilidades**
-- Esquema limitado: no guarda `voltaje` ni `calidad_aire` textual.
-- No es compatible con el formato Flask antiguo.
-- No exporta CSV.
-- Estructura aún muy monolítica.
-
-## Arquitectura final
-
-```text
-ESP32 / cliente HTTP
-   ├── POST /data          (payload legacy Flask)
-   ├── POST /api/mq135     (payload MQ135 actual)
-   └── POST /api/readings  (payload unificado)
-
-FastAPI
-   ├── Validación Pydantic
-   ├── Servicio de normalización
-   ├── Persistencia SQLite
-   ├── Importador legacy
-   ├── Exportador CSV
-   └── Dashboard HTML
-
-SQLite
-   ├── readings
-   └── import_registry
 ```
-
-## Estructura
-
-```text
 air-quality/
 ├── app/
 │   ├── __init__.py
-│   ├── config.py
+│   ├── config.py           # Configuración por variables de entorno
 │   ├── db.py
 │   ├── legacy_import.py
-│   ├── main.py
-│   ├── schemas.py
-│   ├── services.py
+│   ├── main.py             # Aplicación FastAPI
+│   ├── schemas.py          # Modelos Pydantic
+│   ├── services.py         # Normalización, stats, CSV
 │   ├── static/
 │   └── templates/
 │       └── dashboard.html
-├── tests/
-│   ├── conftest.py
-│   ├── test_smoke.py
-│   ├── test_services.py
-│   ├── test_schemas.py
-│   └── test_legacy_import.py
-├── data/
-├── legacy_inputs/
-│   ├── datos_calidad_aire.csv
-│   └── mq135.db
-├── import_legacy.py
+├── tests/                  # smoke, schemas, services, legacy_import
+├── legacy_inputs/          # datos_calidad_aire.csv, mq135.db
+├── import_legacy.py        # Importación manual
 ├── requirements.txt
 ├── run.sh
-└── README.md
+└── .github/workflows/ci.yml
 ```
 
 ## Instalación
 
 ```bash
-cd air_quality_unificado_mejorado
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-## Ejecución
+## Uso
 
 ```bash
 ./run.sh
 ```
 
-Quedará disponible en:
+Disponible en:
 
 - Dashboard: `http://127.0.0.1:8000/dashboard`
 - Salud: `http://127.0.0.1:8000/health`
 - Info: `http://127.0.0.1:8000/api/info`
 
-## Importación automática de los proyectos antiguos
-
-En el arranque, el sistema intenta importar automáticamente:
-
-- `legacy_inputs/datos_calidad_aire.csv`
-- `legacy_inputs/mq135.db`
-
-La importación es **idempotente**: no vuelve a importar el mismo archivo si ya fue registrado.
-
-## Endpoints
-
-### 1) Legacy Flask
+Endpoints de ingesta:
 
 ```bash
+# Legacy Flask
 curl -X POST http://127.0.0.1:8000/data \
   -H 'Content-Type: application/json' \
-  -d '{
-    "valor_analogico": 333,
-    "voltaje": 0.27,
-    "calidad_aire": "Buena"
-  }'
-```
+  -d '{"valor_analogico": 333, "voltaje": 0.27, "calidad_aire": "Buena"}'
 
-### 2) Compatibilidad MQ135 actual
-
-```bash
+# Compatibilidad MQ135
 curl -X POST http://127.0.0.1:8000/api/mq135 \
   -H 'Content-Type: application/json' \
-  -d '{
-    "device_id": "mq135-uno-1",
-    "ao": 512,
-    "do": true
-  }'
-```
+  -d '{"device_id": "mq135-uno-1", "ao": 512, "do": true}'
 
-### 3) Endpoint unificado recomendado
-
-```bash
+# Endpoint unificado recomendado
 curl -X POST http://127.0.0.1:8000/api/readings \
   -H 'Content-Type: application/json' \
-  -d '{
-    "device_id": "sensor-lab-01",
-    "ao": 421,
-    "do_value": false,
-    "voltage": 0.33,
-    "quality_label": "Aceptable",
-    "source": "manual"
-  }'
+  -d '{"device_id": "sensor-lab-01", "ao": 421, "do_value": false, "voltage": 0.33, "quality_label": "Aceptable", "source": "manual"}'
 ```
 
-### 4) Consultar lecturas
+Consulta:
 
 ```bash
 curl 'http://127.0.0.1:8000/api/readings?limit=20'
-```
-
-### 5) Última lectura
-
-```bash
+curl 'http://127.0.0.1:8000/api/readings?device_id=mq135-uno-1&limit=10'
 curl 'http://127.0.0.1:8000/api/readings/latest'
-```
-
-### 6) Estadísticas
-
-```bash
 curl 'http://127.0.0.1:8000/api/stats?window=20'
-```
-
-### 7) Exportar CSV
-
-```bash
 curl -OJ 'http://127.0.0.1:8000/api/export/csv?limit=10000'
 ```
 
-Columnas: `id`, `ts`, `device_id`, `source`, `ao`, `do_value`, `voltage`, `quality_label`.
-
-### 8) Info y listado con filtro
-
-```bash
-curl 'http://127.0.0.1:8000/api/info'
-curl 'http://127.0.0.1:8000/api/readings?device_id=mq135-uno-1&limit=10'
-```
-
-## Importación manual
+Importación manual:
 
 ```bash
 python3 import_legacy.py --csv ./legacy_inputs/datos_calidad_aire.csv --sqlite ./legacy_inputs/mq135.db
 ```
 
-## Tests
+## Configuración
+
+Variables de entorno (definidas en `app/config.py`):
+
+| Variable | Default | Descripción |
+|---|---|---|
+| `AIR_QUALITY_DB_PATH` | `./data/air_quality.db` | Ruta de la base SQLite |
+| `AIR_QUALITY_DEFAULT_DEVICE_ID` | `mq135-default` | Dispositivo por defecto |
+| `AIR_QUALITY_AO_ALERT_THRESHOLD` | `650` | Umbral de alerta para AO |
+| `AIR_QUALITY_IMPORT_ON_STARTUP` | `1` | Importación legacy en arranque (`0` para desactivar) |
+| `AIR_QUALITY_HOST` | `0.0.0.0` | Host del servidor |
+| `AIR_QUALITY_PORT` | `8000` | Puerto del servidor |
+
+## Tests / CI
 
 ```bash
 pytest -q
 ```
 
-La suite usa una DB efímera por test (deja `AIR_QUALITY_DB_PATH` en un `tmp_path` y desactiva la
-importación legacy en startup con `AIR_QUALITY_IMPORT_ON_STARTUP=0`). Cubre:
+La suite usa una DB efímera por test (`AIR_QUALITY_DB_PATH` en `tmp_path`) y desactiva la importación legacy (`AIR_QUALITY_IMPORT_ON_STARTUP=0`). Cubre endpoints smoke (health, ingesta unificada/legacy, listado, latest, stats, export CSV, dashboard), servicios (umbrales, normalización, insert/fetch, stats, CSV), schemas (alias, fuentes, rangos) e importación legacy idempotente. Cobertura aproximada: ~92 % del paquete `app/`.
 
-- **endpoints smoke** (`tests/test_smoke.py`): health, ingesta unificada/legacy (`/data`, `/api/mq135`),
-  listado con filtro, última lectura, stats, devices, export CSV y render del dashboard.
-- **servicios** (`tests/test_services.py`): umbrales de calidad, normalización (incl. mapping legacy y
-  timestamps), insert/fetch, stats, breakdown y serialización CSV.
-- **schemas** (`tests/test_schemas.py`): alias, fuentes y rangos de validación.
-- **importación legacy** (`tests/test_legacy_import.py`): CSV y SQLite idempotentes mediante importación
-  por lotes en una sola transacción.
+CI: GitHub Actions (`.github/workflows/ci.yml`) sobre Python 3.12: **lint** (`ruff check .`) y **test** (`pytest -q`).
 
-Cobertura aproximada: **~92 %** del paquete `app/`.
+## Roadmap
 
-## CI
+- [x] Unificación de endpoints legacy + canónico
+- [x] Importador idempotente de datos antiguos
+- [x] Dashboard con resumen y alertas
+- [ ] Autenticación para endpoints de ingesta
+- [ ] Retención de datos y particionado lógico
+- [ ] Alertas por Telegram/Email si AO supera umbral
+- [ ] WebSocket/SSE para tiempo real
+- [ ] Dockerización con volumen persistente
+- [ ] Calibración por dispositivo y conversión AO a ppm
 
-GitHub Actions (`.github/workflows/ci.yml`) sobre Python 3.12:
-
-- **lint** — `ruff check .`
-- **test** — instala deps + `pytest -q`
-
-## Siguientes mejoras naturales
-
-1. Autenticación para endpoints de ingestión.
-2. Retención de datos y particionado lógico.
-3. Alertas por Telegram/Email si `ao` supera umbral.
-4. WebSocket o SSE para actualización en tiempo real sin polling.
-5. Dockerización con volumen persistente.
-6. Soporte multi-sensor real con calibración por dispositivo.
-7. Conversión de AO a ppm si defines curva/calibración real del sensor.
-
-## Nota técnica importante
-
-El valor `AO` del MQ-135 **no equivale directamente** a una medida ambiental certificada sin calibración. Este proyecto lo trata correctamente como una **señal relativa** útil para tendencias, alertas internas y comparación entre lecturas del mismo dispositivo.
+Nota técnica: el valor `AO` del MQ-135 no equivale a una medida ambiental certificada sin calibración; el proyecto lo trata como señal relativa para tendencias y alertas.
 
 ## Licencia
 
