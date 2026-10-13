@@ -7,7 +7,11 @@ from pathlib import Path
 
 import pandas as pd
 
-from app.legacy_import import import_legacy_csv, import_known_legacy_files, import_legacy_sqlite
+from app.legacy_import import (
+    import_known_legacy_files,
+    import_legacy_csv,
+    import_legacy_sqlite,
+)
 from app.services import fetch_readings, fetch_stats
 
 

@@ -19,7 +19,13 @@ def tmp_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     db = tmp_path / "test_air_quality.db"
     monkeypatch.setenv("AIR_QUALITY_DB_PATH", str(db))
     monkeypatch.setenv("AIR_QUALITY_IMPORT_ON_STARTUP", "0")
-    for name in ("app.config", "app.db", "app.services", "app.legacy_import", "app.main"):
+    for name in (
+        "app.config",
+        "app.db",
+        "app.services",
+        "app.legacy_import",
+        "app.main",
+    ):
         importlib.reload(importlib.import_module(name))
     return db
 
@@ -28,6 +34,7 @@ def tmp_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 def db(tmp_db: Path) -> Path:
     """DB efímera inicializada (esquema creado)."""
     from app.db import init_db
+
     init_db()
     return tmp_db
 

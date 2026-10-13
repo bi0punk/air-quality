@@ -44,7 +44,10 @@ def test_create_and_read_unified(client):
 
 def test_legacy_endpoints_compat(client):
     # Endpoint legado Flask /data
-    r = client.post("/data", json={"valor_analogico": 420, "voltaje": 2.1, "calidad_aire": "Regular"})
+    r = client.post(
+        "/data",
+        json={"valor_analogico": 420, "voltaje": 2.1, "calidad_aire": "Regular"},
+    )
     assert r.status_code == 200
     assert r.json()["compat_mode"] == "legacy_flask"
 
@@ -69,7 +72,10 @@ def test_csv_export(client):
 
 
 def test_latest_includes_full_row(client):
-    client.post("/api/readings", json={"device_id": "d1", "ao": 250, "do_value": 0, "voltage": 1.2})
+    client.post(
+        "/api/readings",
+        json={"device_id": "d1", "ao": 250, "do_value": 0, "voltage": 1.2},
+    )
     latest = client.get("/api/readings/latest").json()
     assert "device_id" in latest and latest["device_id"] == "d1"
     assert "do_value" in latest and latest["do_value"] == 0

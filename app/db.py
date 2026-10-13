@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Iterator
 
 from .config import DB_PATH
 
@@ -10,8 +10,8 @@ from .config import DB_PATH
 def get_conn() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
-    conn.execute('PRAGMA journal_mode=WAL;')
-    conn.execute('PRAGMA foreign_keys=ON;')
+    conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("PRAGMA foreign_keys=ON;")
     return conn
 
 
@@ -28,7 +28,7 @@ def connection() -> Iterator[sqlite3.Connection]:
 def init_db() -> None:
     with connection() as conn:
         conn.executescript(
-            '''
+            """
             CREATE TABLE IF NOT EXISTS readings (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 ts TEXT NOT NULL,
@@ -51,5 +51,5 @@ def init_db() -> None:
                 row_count INTEGER NOT NULL DEFAULT 0,
                 UNIQUE(source_type, source_path)
             );
-            '''
+            """
         )

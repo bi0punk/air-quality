@@ -5,7 +5,7 @@ Usan la DB efímera del fixture `db` de `conftest.py`.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from app.config import AO_ALERT_THRESHOLD, DEFAULT_DEVICE_ID
 from app.services import (
@@ -16,8 +16,8 @@ from app.services import (
     fetch_stats,
     infer_do_value,
     infer_quality_label,
-    insert_readings_many,
     insert_reading,
+    insert_readings_many,
     normalize_payload,
     rows_to_csv,
 )
@@ -64,7 +64,7 @@ def test_normalize_legacy_fields():
 
 
 def test_normalize_preserves_timestamp():
-    dt = datetime(2025, 11, 12, 10, 30, tzinfo=timezone.utc)
+    dt = datetime(2025, 11, 12, 10, 30, tzinfo=UTC)
     data = normalize_payload({"device_id": "d", "ao": 100, "ts": dt})
     assert data["ts"].startswith("2025-11-12T10:30:00")
 
@@ -144,13 +144,26 @@ def test_device_breakdown(db):
 
 def test_rows_to_csv(db):
     insert_reading(
-        {"device_id": "a", "ao": 100, "do_value": 1, "voltage": 1.5,
-         "quality_label": "Bueno", "source": "manual"}
+        {
+            "device_id": "a",
+            "ao": 100,
+            "do_value": 1,
+            "voltage": 1.5,
+            "quality_label": "Bueno",
+            "source": "manual",
+        }
     )
     csv_text = rows_to_csv(fetch_readings(limit=5))
     lines = csv_text.strip().splitlines()
     assert lines[0].split(",") == [
-        "id", "ts", "device_id", "source", "ao", "do_value", "voltage", "quality_label",
+        "id",
+        "ts",
+        "device_id",
+        "source",
+        "ao",
+        "do_value",
+        "voltage",
+        "quality_label",
     ]
     assert len(lines) == 2
     assert "a" in lines[1] and "Bueno" in lines[1]
